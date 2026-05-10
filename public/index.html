@@ -23,9 +23,37 @@
             border-radius: 0 0 15px 15px; z-index: 100;
         }
         #banner.show { top: 0px; }
+        /* USERNAME UI */
+        #login-screen {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0,0,0,0.9); display: flex; flex-direction: column;
+            align-items: center; justify-content: center; z-index: 1000;
+        }
+        #login-box {
+            background: #111; border: 2px solid #00ffcc; padding: 40px;
+            text-align: center; box-shadow: 0 0 30px rgba(0,255,204,0.2);
+        }
+        #username-input {
+            background: #000; border: 1px solid #444; color: #00ffcc;
+            padding: 12px; font-family: monospace; font-size: 1.2em;
+            margin-bottom: 20px; outline: none; width: 250px;
+        }
+        #start-btn {
+            background: #00ffcc; color: #000; border: none; padding: 12px 30px;
+            font-weight: bold; cursor: pointer; text-transform: uppercase;
+        }
     </style>
 </head>
 <body>
+
+<div id="login-screen">
+    <div id="login-box">
+        <h2 style="color:#00ffcc; margin-top:0;">PILOT REGISTRATION</h2>
+        <input type="text" id="username-input" placeholder="ENTER CALLSIGN" maxlength="12">
+        <br>
+        <button id="start-btn">LAUNCH ROCKET</button>
+    </div>
+</div>
 
 <div id="banner">Entering: <span id="galName"></span></div>
 
@@ -49,16 +77,23 @@
 // --- MULTIPLAYER SETUP ---
 const socket = io();
 let otherPlayers = {};
+let myUsername = "Guest";
 
 socket.on('currentPlayers', (p) => { otherPlayers = p; });
 socket.on('newPlayer', (d) => { otherPlayers[d.id] = d.player; });
 socket.on('playerMoved', (d) => { otherPlayers[d.id] = d.player; });
 socket.on('playerDisconnected', (id) => { delete otherPlayers[id]; });
 
+document.getElementById('start-btn').onclick = () => {
+    const input = document.getElementById('username-input').value;
+    if (input.trim() !== "") myUsername = input;
+    socket.emit('joinGame', myUsername);
+    document.getElementById('login-screen').style.display = 'none';
+};
+
 const canvas = document.getElementById('simCanvas');
 const ctx = canvas.getContext('2d');
 
-// FIX: Set canvas size once and on resize, not every frame
 function resize() {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
@@ -270,7 +305,7 @@ function update() {
                 p.x = b.x + nx*(b.radius + 6); p.y = b.y + ny*(b.radius + 6);
             }
         });
-        socket.emit('playerMovement', { x: ship.x, y: ship.y, angle: ship.angle, throttle: 0, isBroken: true });
+        socket.emit('playerMovement', { x: ship.x, y: ship.y, angle: ship.angle, throttle: 0, isBroken: true, username: myUsername });
         return;
     }
 
@@ -357,7 +392,7 @@ function update() {
     }
 
     // MULTIPLAYER BROADCAST
-    socket.emit('playerMovement', { x: ship.x, y: ship.y, angle: ship.angle, throttle: ship.throttle, isBroken: ship.isBroken });
+    socket.emit('playerMovement', { x: ship.x, y: ship.y, angle: ship.angle, throttle: ship.throttle, isBroken: ship.isBroken, username: myUsername });
 }
 
 function drawGalaxyLabels() {
@@ -419,7 +454,7 @@ function drawTrajectory() {
         trajectoryCache = []; 
         let tx = ship.x, ty = ship.y, tvx = ship.vx, tvy = ship.vy;
         const maxPhysicsSteps = 12000; 
-        const stepSkip = 100;            
+        const stepSkip = 100;             
         const predictionDT = 0.15;      
 
         for (let i = 0; i < maxPhysicsSteps; i++) {
@@ -522,12 +557,22 @@ function drawPlanet(b) {
     ctx.textAlign = "center"; ctx.fillText(b.name, b.x, b.y - b.radius * 1.4); ctx.restore();
 }
 
-function drawRocket(targetX, targetY, targetAngle, targetThrottle, isOther = false) {
+function drawRocket(targetX, targetY, targetAngle, targetThrottle, name = "") {
     ctx.save(); 
     ctx.translate(targetX, targetY); 
+
+    // DRAW USERNAME
+    if(name !== "") {
+        ctx.save();
+        ctx.fillStyle = "white";
+        ctx.font = `${Math.max(14, 20/zoom)}px monospace`;
+        ctx.textAlign = "center";
+        ctx.fillText(name.toUpperCase(), 0, -100);
+        ctx.restore();
+    }
+
     ctx.rotate(targetAngle + Math.PI/2);
-    // Change color if it's someone else
-    ctx.strokeStyle = isOther ? "#00ffcc" : "#555"; 
+    ctx.strokeStyle = "#555"; 
     ctx.lineWidth = 3;
     [-1, 1].forEach(s => { ctx.beginPath(); ctx.moveTo(s*8, 10); ctx.lineTo(s*40, 60); ctx.stroke(); ctx.fillStyle = "#111"; ctx.fillRect(s*40-10, 60, 20, 6); });
 
@@ -543,12 +588,12 @@ function drawRocket(targetX, targetY, targetAngle, targetThrottle, isOther = fal
     }
 
     let hG = ctx.createLinearGradient(-13, 0, 13, 0);
-    hG.addColorStop(0, isOther ? "#0a2222" : "#1a1c1f"); 
-    hG.addColorStop(0.5, isOther ? "#00ffcc" : "#7a7f85"); 
-    hG.addColorStop(1, isOther ? "#0a2222" : "#1a1c1f");
+    hG.addColorStop(0, "#1a1c1f"); 
+    hG.addColorStop(0.5, "#7a7f85"); 
+    hG.addColorStop(1, "#1a1c1f");
     ctx.fillStyle = hG; ctx.fillRect(-13, -15, 26, 55); 
     let nG = ctx.createRadialGradient(0, -30, 5, 0, -30, 40);
-    nG.addColorStop(0, isOther ? "#00ccaa" : "#ccc"); nG.addColorStop(1, "#444");
+    nG.addColorStop(0, "#ccc"); nG.addColorStop(1, "#444");
     ctx.fillStyle = nG; ctx.beginPath(); ctx.moveTo(-13, -15); ctx.lineTo(0, -65); ctx.lineTo(13, -15); ctx.fill();
     ctx.fillStyle = "#33bbff"; ctx.beginPath(); ctx.arc(0, -28, 7, 0, Math.PI*2); ctx.fill();
     ctx.restore();
@@ -573,14 +618,13 @@ function render() {
     Object.keys(otherPlayers).forEach(id => {
         if (id === socket.id) return;
         const p = otherPlayers[id];
-        // Only draw if player data exists and they aren't broken
         if (p && !p.isBroken) {
-            drawRocket(p.x, p.y, p.angle, p.throttle, true);
+            drawRocket(p.x, p.y, p.angle, p.throttle, p.username || "Guest");
         }
     });
 
     if(!ship.isBroken) {
-        drawRocket(ship.x, ship.y, ship.angle, ship.throttle, false);
+        drawRocket(ship.x, ship.y, ship.angle, ship.throttle, myUsername);
         if (targetPlanet) {
             let a = Math.atan2(targetPlanet.y - ship.y, targetPlanet.x - ship.x);
             ctx.save(); ctx.translate(ship.x + Math.cos(a)*120, ship.y + Math.sin(a)*120); ctx.rotate(a);
