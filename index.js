@@ -40,8 +40,6 @@ io.on('connection', (socket) => {
 
 // Use Replit's port or 3000
 const PORT = process.env.PORT || 3000;
-
-// "0.0.0.0" is key for making it accessible on the public web
-http.listen(PORT, "0.0.0.0", () => {
-    console.log(`🚀 Rocket Server is LIVE on port ${PORT}`);
+server.listen(PORT, () => {
+  console.log(`🚀 Rocket Server is LIVE on port ${PORT}`);
 });
