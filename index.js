@@ -39,7 +39,8 @@ io.on('connection', (socket) => {
 });
 
 // Use Replit's port or 3000
+// Use the port provided by the hosting service or 3000
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
+http.listen(PORT, () => {
   console.log(`🚀 Rocket Server is LIVE on port ${PORT}`);
 });
