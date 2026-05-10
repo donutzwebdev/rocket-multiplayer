@@ -266,7 +266,7 @@ function shatter() {
         ship.pieces.push({ 
             ...p, x: ship.x, y: ship.y, 
             vx: ship.vx + (seededRandom()-0.5)*500, 
-            vy: ship.vy + (seededRandom()-0.5)*500, 
+            vy: ship.vy + (seededOpen-0.5)*500, 
             ang: ship.angle, rv: (seededRandom()-0.5)*0.5 
         });
     });
@@ -419,13 +419,52 @@ function drawGalaxyLabels() {
 function drawShipTracker() {
     if (zoom < 0.04) {
         ctx.save();
+        
+        // 1. TRACK OTHER PLAYERS
+        Object.keys(otherPlayers).forEach(id => {
+            if (id === socket.id) return;
+            const p = otherPlayers[id];
+            if (!p || p.isBroken) return;
+
+            let screenX = (p.x - ship.x) * zoom + canvas.width / 2;
+            let screenY = (p.y - ship.y) * zoom + canvas.height / 2;
+
+            ctx.save();
+            ctx.translate(screenX, screenY);
+            
+            let pulse = Math.sin(Date.now() / 400) * 0.5 + 0.5;
+            ctx.strokeStyle = `rgba(0, 255, 204, ${0.1 + pulse * 0.3})`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(0, 0, 20, 0, Math.PI * 2);
+            ctx.stroke();
+
+            ctx.rotate(p.angle + Math.PI/2);
+            ctx.fillStyle = "#00ffcc";
+            ctx.beginPath();
+            ctx.moveTo(0, -10);
+            ctx.lineTo(6, 8);
+            ctx.lineTo(-6, 8);
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+
+            ctx.fillStyle = "rgba(0, 255, 204, 0.6)";
+            ctx.font = "10px monospace";
+            ctx.textAlign = "center";
+            ctx.fillText(p.username || "PILOT", screenX, screenY + 25);
+        });
+
+        // 2. TRACK LOCAL PLAYER
+        ctx.save();
         ctx.translate(canvas.width / 2, canvas.height / 2);
-        let pulse = Math.sin(Date.now() / 250) * 0.5 + 0.5;
-        ctx.strokeStyle = `rgba(0, 255, 204, ${0.2 + pulse * 0.4})`;
+        let myPulse = Math.sin(Date.now() / 250) * 0.5 + 0.5;
+        ctx.strokeStyle = `rgba(0, 255, 204, ${0.2 + myPulse * 0.4})`;
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(0, 0, 25, 0, Math.PI * 2);
         ctx.stroke();
+
         ctx.save();
         ctx.rotate(ship.angle + Math.PI/2);
         ctx.fillStyle = "#00ffcc";
@@ -436,10 +475,13 @@ function drawShipTracker() {
         ctx.closePath();
         ctx.fill();
         ctx.restore();
+
         ctx.fillStyle = "rgba(255,255,255,0.8)";
         ctx.font = "bold 12px monospace";
         ctx.textAlign = "center";
-        ctx.fillText("SHIP LOCATED", 0, 45);
+        ctx.fillText("YOU", 0, 45);
+        ctx.restore();
+
         ctx.restore();
     }
 }
@@ -454,7 +496,7 @@ function drawTrajectory() {
         trajectoryCache = []; 
         let tx = ship.x, ty = ship.y, tvx = ship.vx, tvy = ship.vy;
         const maxPhysicsSteps = 12000; 
-        const stepSkip = 100;             
+        const stepSkip = 100;              
         const predictionDT = 0.15;      
 
         for (let i = 0; i < maxPhysicsSteps; i++) {
