@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SFS - OG Rocket Galaxy Edition</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body, html { margin: 0; padding: 0; overflow: hidden; background: #000; color: #ececec; font-family: 'Segoe UI', sans-serif; user-select: none; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        #ui { position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.85); padding: 15px; border-left: 5px solid #00ffcc; pointer-events: none; border-radius: 0 10px 10px 0; border: 1px solid rgba(255,255,255,0.1); }
+        .stat { font-family: monospace; font-size: 1.1em; margin-bottom: 4px; }
+        #navMenu { 
+            display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(5, 5, 5, 0.98); border: 2px solid #00ffcc; padding: 25px;
+            width: 380px; max-height: 500px; overflow-y: hidden; text-align: center; box-shadow: 0 0 60px rgba(0,255,204,0.15);
+        }
+        .planet-opt { padding: 12px; border-bottom: 1px solid #222; color: #666; font-family: monospace; font-size: 0.9em; }
+        .planet-opt.selected { background: #00ffcc; color: #000; font-weight: bold; }
+        #banner {
+            position: absolute; top: -100px; left: 50%; transform: translateX(-50%);
+            background: #fff; color: #000; padding: 14px 60px; font-weight: 900;
+            text-transform: uppercase; letter-spacing: 4px; transition: top 0.6s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+            border-radius: 0 0 15px 15px; z-index: 100;
+        }
+        #banner.show { top: 0px; }
+    </style>
+</head>
+<body>
+
+<div id="banner">Entering: <span id="galName"></span></div>
+
+<div id="ui">
+    <div id="shipStatus" class="stat">STATUS: NOMINAL</div>
+    <div class="stat">THROTTLE: <span id="throt">0</span>%</div>
+    <div class="stat">V: <span id="vel">0</span> m/s</div>
+    <div class="stat">A: <span id="alt">0</span> m</div>
+    <div class="stat" style="color:#00ffcc">NAV: <span id="navTarget">READY</span></div>
+    <div class="stat" style="font-size: 0.8em; opacity: 0.6; margin-top:10px;">[T] TOGGLE PATH: <span id="pathStatus">ON</span></div>
+</div>
+
+<div id="navMenu">
+    <h2 style="color:#00ffcc; margin-top:0;">STAR MAP</h2>
+    <div id="planetList"></div>
+</div>
+
+<canvas id="simCanvas"></canvas>
+
+<script>
+// --- MULTIPLAYER SETUP ---
+const socket = io();
+let otherPlayers = {};
+
+socket.on('currentPlayers', (p) => { otherPlayers = p; });
+socket.on('newPlayer', (d) => { otherPlayers[d.id] = d.player; });
+socket.on('playerMoved', (d) => { otherPlayers[d.id] = d.player; });
+socket.on('playerDisconnected', (id) => { delete otherPlayers[id]; });
+
+const canvas = document.getElementById('simCanvas');
+const ctx = canvas.getContext('2d');
+
+// FIX: Set canvas size once and on resize, not every frame
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+let zoom = 0.5;
+const keys = {};
+const DT = 0.05;
+
+let trajectoryCache = [];
+let frameCounter = 0;
+let showTrajectory = true; 
+
+const G = 0.85; 
+const PLANET_MASS = 16000000; 
+const MAX_THRUST = 480; 
+
+const bodies = [];
+const galaxies = []; 
+const galaxyTypes = [
+    { name: "Milky Way", theme: "Rocky", colors: ["#224422", "#443322", "#555555"], spread: 22000 },
+    { name: "Andromeda", theme: "Gas", colors: ["#4a1a4a", "#aa4422", "#224466"], spread: 35000 },
+    { name: "Triangulum", theme: "Void", colors: ["#0a0a0a", "#1a1a1a", "#2a2a2a"], spread: 55000 },
+    { name: "Centaurus", theme: "Neon", colors: ["#002211", "#00ffaa", "#110033"], spread: 19000 },
+    { name: "Sombrero", theme: "Dust", colors: ["#332211", "#ffcc44", "#886622"], spread: 28000 },
+    { name: "Cyborg", theme: "Tech", colors: ["#111111", "#003333", "#00aaaa"], spread: 24000 },
+    { name: "Whirlpool", theme: "Rocky", colors: ["#1a2a6c", "#b21f1f", "#fdbb2d"], spread: 26000 },
+    { name: "Black Eye", theme: "Void", colors: ["#000000", "#434343", "#666666"], spread: 30000 },
+    { name: "Pinwheel", theme: "Gas", colors: ["#5433ff", "#20bdff", "#a5fecb"], spread: 32000 },
+    { name: "Sunflower", theme: "Dust", colors: ["#f7971e", "#ffd200", "#804000"], spread: 25000 },
+    { name: "Andromeda II", theme: "Gas", colors: ["#2c003e", "#fe346e", "#d2e603"], spread: 31000 },
+    { name: "Triangulum Prime", theme: "Void", colors: ["#1b262c", "#0f4c75", "#3282b8"], spread: 45000 },
+    { name: "Centaurus Alpha", theme: "Neon", colors: ["#08d9d6", "#252a34", "#ff2e63"], spread: 20000 }
+];
+
+let LCG_SEED = 12345;
+function seededRandom() {
+    LCG_SEED = (LCG_SEED * 1664525 + 1013904223) % 4294967296;
+    return LCG_SEED / 4294967296;
+}
+
+function generateUniverse() {
+    const universeSize = 12000000; 
+    const minGalDistance = 2500000; 
+
+    galaxyTypes.forEach((gt) => {
+        let ox, oy, tooClose;
+        let attempts = 0;
+
+        do {
+            tooClose = false;
+            ox = (seededRandom() - 0.5) * universeSize;
+            oy = (seededRandom() - 0.5) * universeSize;
+            for(let g of galaxies) {
+                let d = Math.sqrt((ox-g.x)**2 + (oy-g.y)**2);
+                if(d < minGalDistance) tooClose = true;
+            }
+            attempts++;
+        } while(tooClose && attempts < 200);
+
+        galaxies.push({ name: gt.name, x: ox, y: oy });
+
+        for (let i = 0; i < 9; i++) {
+            const features = [];
+            for(let f=0; f<20; f++) features.push({ r: seededRandom(), a: seededRandom()*Math.PI*2, s: 0.1+seededRandom()*0.6 });
+
+            const debris = [];
+            if (gt.name === "Black Eye" && seededRandom() > 0.4) {
+                for(let d=0; d<4; d++) {
+                    debris.push({ 
+                        a: seededRandom() * Math.PI * 2, 
+                        w: 20 + seededRandom()*30, 
+                        h: 12 + seededRandom()*20, 
+                        rot: seededRandom()*Math.PI,
+                        col: ["#8b4513", "#5d4037", "#4e342e"][Math.floor(seededRandom()*3)]
+                    });
+                }
+            }
+
+            bodies.push({
+                galaxy: gt.name, theme: gt.theme, name: `${gt.name.substring(0,3).toUpperCase()}-${i+1}`,
+                x: ox + (i * gt.spread) - (gt.spread * 4), y: oy + (Math.sin(i * 1.8) * gt.spread),
+                radius: 1800 + seededRandom() * 2500, seed: seededRandom() * 9999, palette: gt.colors, 
+                atmos: 1.1 + seededRandom() * 0.3, features: features, debris: debris,
+                mass: PLANET_MASS * (1 + seededRandom())
+            });
+        }
+    });
+}
+generateUniverse();
+
+let ship = {
+    x: bodies[0].x, y: bodies[0].y - bodies[0].radius - 61.5, 
+    vx: 0, vy: 0, angle: -Math.PI/2, throttle: 0, 
+    rotationSpeed: 0.03, isBroken: false, isLanded: true, pieces: []
+};
+
+let navIndex = 0;
+let targetPlanet = null;
+let menuOpen = false;
+let currentGal = "";
+let isAutoOrbiting = false;
+let targetOrbitVel = { vx: 0, vy: 0 };
+const ORBIT_SMOOTHING = 0.05;
+
+window.addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    keys[k] = true;
+
+    if (k === 't') {
+        showTrajectory = !showTrajectory;
+        document.getElementById('pathStatus').innerText = showTrajectory ? "ON" : "OFF";
+    }
+
+    if (k === 'e') {
+        menuOpen = !menuOpen;
+        document.getElementById('navMenu').style.display = menuOpen ? 'block' : 'none';
+        if (menuOpen) updateNavList();
+    }
+    if (k === 'o' && !ship.isLanded && !ship.isBroken) setCircularOrbit();
+    if (menuOpen) {
+        if (e.key === 'ArrowDown') { navIndex = (navIndex + 1) % bodies.length; updateNavList(); }
+        if (e.key === 'ArrowUp') { navIndex = (navIndex - 1 + bodies.length) % bodies.length; updateNavList(); }
+        if (e.key === 'Enter') {
+            targetPlanet = bodies[navIndex];
+            document.getElementById('navTarget').innerText = targetPlanet.name;
+            menuOpen = false;
+            document.getElementById('navMenu').style.display = 'none';
+        }
+    }
+});
+
+function setCircularOrbit() {
+    let res = getClosestBody(ship.x, ship.y);
+    let b = res.body;
+    let r = res.dist;
+    let orbitSpeed = Math.sqrt((G * b.mass) / r);
+    let angleToBody = Math.atan2(ship.y - b.y, ship.x - b.x);
+    let orbitAngle = angleToBody + Math.PI / 2; 
+
+    targetOrbitVel.vx = Math.cos(orbitAngle) * orbitSpeed;
+    targetOrbitVel.vy = Math.sin(orbitAngle) * orbitSpeed;
+    isAutoOrbiting = true;
+}
+
+window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+window.addEventListener('wheel', e => { zoom = Math.max(0.00001, Math.min(6, zoom * (e.deltaY > 0 ? 0.95 : 1.05))); });
+
+function updateNavList() {
+    const list = document.getElementById('planetList');
+    list.innerHTML = "";
+    bodies.forEach((b, i) => {
+        const d = document.createElement('div');
+        d.className = `planet-opt ${i === navIndex ? 'selected' : ''}`;
+        d.innerText = `[${b.galaxy}] ${b.name}`;
+        list.appendChild(d);
+        if (i === navIndex) d.scrollIntoView({ block: 'center' });
+    });
+}
+
+function shatter() {
+    ship.isBroken = true;
+    const parts = [
+        {w:24, h:35, col:'#aaa'}, {w:26, h:50, col:'#555'},
+        {w:18, h:15, col:'#222'}, {w:6, h:45, col:'#888'}, {w:6, h:45, col:'#888'}
+    ];
+    parts.forEach(p => {
+        ship.pieces.push({ 
+            ...p, x: ship.x, y: ship.y, 
+            vx: ship.vx + (seededRandom()-0.5)*500, 
+            vy: ship.vy + (seededRandom()-0.5)*500, 
+            ang: ship.angle, rv: (seededRandom()-0.5)*0.5 
+        });
+    });
+}
+
+function getClosestBody(px, py) {
+    let cl = bodies[0], mD = Infinity;
+    bodies.forEach(b => {
+        let d = Math.sqrt((px - b.x)**2 + (py - b.y)**2);
+        if (d < mD) { mD = d; cl = b; }
+    });
+    return { body: cl, dist: mD };
+}
+
+function update() {
+    if (keys['r']) { ship.isBroken = false; ship.pieces = []; ship.vx = 0; ship.vy = 0; ship.x = bodies[0].x; ship.y = bodies[0].y - bodies[0].radius - 61.5; ship.isLanded = true; ship.angle = -Math.PI/2; ship.throttle = 0; isAutoOrbiting = false; }
+    if (menuOpen) return;
+
+    if (ship.isBroken) {
+        ship.pieces.forEach(p => {
+            let res = getClosestBody(p.x, p.y);
+            let b = res.body; let d = res.dist;
+            let force = (G * b.mass) / (d * d);
+            let a = Math.atan2(b.y - p.y, b.x - p.x);
+            p.vx += Math.cos(a) * force * DT; p.vy += Math.sin(a) * force * DT;
+            p.x += p.vx * DT; p.y += p.vy * DT; p.ang += p.rv;
+            if (d < b.radius + 5) {
+                let nx = (p.x - b.x)/d; let ny = (p.y - b.y)/d;
+                let dot = p.vx*nx + p.vy*ny;
+                if (dot < 0) {
+                    p.vx -= 1.6 * dot * nx;
+                    p.vy -= 1.6 * dot * ny;
+                    p.vx *= 0.5; p.vy *= 0.5; 
+                    p.rv = (seededRandom()-0.5) * 0.4;
+                }
+                p.x = b.x + nx*(b.radius + 6); p.y = b.y + ny*(b.radius + 6);
+            }
+        });
+        socket.emit('playerMovement', { x: ship.x, y: ship.y, angle: ship.angle, throttle: 0, isBroken: true });
+        return;
+    }
+
+    if (keys['w']) { ship.throttle = Math.min(1, ship.throttle + 0.01); isAutoOrbiting = false; }
+    if (keys['s']) { ship.throttle = Math.max(0, ship.throttle - 0.01); isAutoOrbiting = false; }
+    if (keys['a'] || keys['d']) isAutoOrbiting = false;
+
+    if (isAutoOrbiting && !ship.isLanded && !ship.isBroken) {
+        ship.vx += (targetOrbitVel.vx - ship.vx) * ORBIT_SMOOTHING;
+        ship.vy += (targetOrbitVel.vy - ship.vy) * ORBIT_SMOOTHING;
+        let travelAngle = Math.atan2(ship.vy, ship.vx);
+        let angleDiff = travelAngle - ship.angle;
+        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+        ship.angle += angleDiff * ORBIT_SMOOTHING;
+        let velDiff = Math.sqrt((targetOrbitVel.vx - ship.vx)**2 + (targetOrbitVel.vy - ship.vy)**2);
+        if (velDiff < 1) isAutoOrbiting = false;
+    }
+
+    let res = getClosestBody(ship.x, ship.y);
+    let b = res.body;
+    let dist = res.dist;
+
+    let force = (G * b.mass) / (dist * dist);
+    let angleToBody = Math.atan2(b.y - ship.y, b.x - ship.x);
+    let gx = Math.cos(angleToBody) * force; 
+    let gy = Math.sin(angleToBody) * force;
+
+    let tx = Math.cos(ship.angle) * ship.throttle * MAX_THRUST;
+    let ty = Math.sin(ship.angle) * ship.throttle * MAX_THRUST;
+
+    if (ship.isLanded) {
+        let thrustMag = Math.sqrt(tx*tx + ty*ty);
+        let gravMag = Math.sqrt(gx*gx + gy*gy);
+        if (ship.throttle > 0.35 || thrustMag > gravMag * 1.1) {
+            ship.isLanded = false;
+        } else {
+            ship.vx = 0; ship.vy = 0;
+            let sAng = Math.atan2(ship.y - b.y, ship.x - b.x);
+            ship.x = b.x + Math.cos(sAng) * (b.radius + 61.5);
+            ship.y = b.y + Math.sin(sAng) * (b.radius + 61.5);
+        }
+    }
+
+    if (!ship.isLanded) {
+        ship.vx += (gx + tx) * DT;
+        ship.vy += (gy + ty) * DT;
+        ship.x += ship.vx * DT;
+        ship.y += ship.vy * DT;
+
+        let alt = dist - b.radius;
+        if (alt <= 61.5) {
+            let spd = Math.sqrt(ship.vx**2 + ship.vy**2);
+            let sAng = Math.atan2(ship.y - b.y, ship.x - b.x);
+            let relVel = (ship.vx * (ship.x - b.x) + ship.vy * (ship.y - b.y));
+
+            let diff = Math.abs((ship.angle % (Math.PI*2)) - (sAng % (Math.PI*2)));
+            if (diff > Math.PI) diff = Math.PI*2 - diff; 
+            let degOff = diff * (180/Math.PI);
+
+            if (alt < 54 && relVel < 0) {
+                if (spd > 110 || degOff > 3) {
+                    shatter();
+                } else if (ship.throttle < 0.2) {
+                    ship.isLanded = true; ship.vx = 0; ship.vy = 0; ship.angle = sAng;
+                    ship.x = b.x + Math.cos(sAng) * (b.radius + 61.5);
+                    ship.y = b.y + Math.sin(sAng) * (b.radius + 61.5);
+                }
+            }
+        }
+    }
+
+    if (!ship.isLanded && !isAutoOrbiting) {
+        if (keys['a']) ship.angle -= ship.rotationSpeed;
+        if (keys['d']) ship.angle += ship.rotationSpeed;
+    }
+
+    if (dist < b.radius * 8 && currentGal !== b.galaxy) {
+        currentGal = b.galaxy;
+        const ban = document.getElementById('banner');
+        document.getElementById('galName').innerText = b.galaxy;
+        ban.classList.add('show');
+        setTimeout(() => ban.classList.remove('show'), 4000);
+    }
+
+    // MULTIPLAYER BROADCAST
+    socket.emit('playerMovement', { x: ship.x, y: ship.y, angle: ship.angle, throttle: ship.throttle, isBroken: ship.isBroken });
+}
+
+function drawGalaxyLabels() {
+    ctx.save();
+    galaxies.forEach(g => {
+        let screenX = (g.x - ship.x) * zoom + canvas.width / 2;
+        let screenY = (g.y - ship.y) * zoom + canvas.height / 2;
+        let growthFactor = 1 / Math.sqrt(zoom * 80); 
+        let fontSize = Math.min(14 + growthFactor, 180); 
+        ctx.fillStyle = "rgba(0, 255, 204, 0.7)";
+        ctx.font = `bold ${fontSize}px Segoe UI`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        if (screenX > -500 && screenX < canvas.width + 500) {
+            ctx.fillText(g.name.toUpperCase(), screenX, screenY);
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(screenX - fontSize/1.5, screenY - fontSize/1.5, fontSize*1.33, fontSize*1.33);
+        }
+    });
+    ctx.restore();
+}
+
+function drawShipTracker() {
+    if (zoom < 0.04) {
+        ctx.save();
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        let pulse = Math.sin(Date.now() / 250) * 0.5 + 0.5;
+        ctx.strokeStyle = `rgba(0, 255, 204, ${0.2 + pulse * 0.4})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(0, 0, 25, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.save();
+        ctx.rotate(ship.angle + Math.PI/2);
+        ctx.fillStyle = "#00ffcc";
+        ctx.beginPath();
+        ctx.moveTo(0, -15);
+        ctx.lineTo(8, 10);
+        ctx.lineTo(-8, 10);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+        ctx.fillStyle = "rgba(255,255,255,0.8)";
+        ctx.font = "bold 12px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("SHIP LOCATED", 0, 45);
+        ctx.restore();
+    }
+}
+
+function drawTrajectory() {
+    if (ship.isBroken || ship.isLanded || !showTrajectory) {
+        trajectoryCache = [];
+        return;
+    }
+    frameCounter++;
+    if (frameCounter % 4 === 0 || trajectoryCache.length === 0) {
+        trajectoryCache = []; 
+        let tx = ship.x, ty = ship.y, tvx = ship.vx, tvy = ship.vy;
+        const maxPhysicsSteps = 12000; 
+        const stepSkip = 100;            
+        const predictionDT = 0.15;      
+
+        for (let i = 0; i < maxPhysicsSteps; i++) {
+            let res = getClosestBody(tx, ty);
+            let b = res.body; 
+            let dSq = (tx - b.x)**2 + (ty - b.y)**2;
+            let d = Math.sqrt(dSq);
+            let f = (G * b.mass) / dSq;
+            let angleToBody = Math.atan2(b.y - ty, b.x - tx);
+            tvx += Math.cos(angleToBody) * f * predictionDT; 
+            tvy += Math.sin(angleToBody) * f * predictionDT;
+            tx += tvx * predictionDT; 
+            ty += tvy * predictionDT;
+            if (i % stepSkip === 0) trajectoryCache.push({x: tx, y: ty});
+            if (d < b.radius) break;
+        }
+    }
+    if (trajectoryCache.length > 0) {
+        ctx.beginPath();
+        ctx.setLineDash([8, 12]); 
+        ctx.strokeStyle = "rgba(0, 255, 204, 0.4)"; 
+        ctx.lineWidth = 1.5 / zoom;
+        ctx.moveTo(ship.x, ship.y);
+        for (let p of trajectoryCache) ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+}
+
+function drawPlanet(b) {
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.radius + 10, 0, Math.PI*2);
+    ctx.fillStyle = "rgba(255,255,255,0.05)";
+    ctx.fill();
+
+    let aG = ctx.createRadialGradient(b.x, b.y, b.radius, b.x, b.y, b.radius * b.atmos);
+    aG.addColorStop(0, b.palette[1] + "33"); aG.addColorStop(1, "transparent");
+    ctx.fillStyle = aG; ctx.beginPath(); ctx.arc(b.x, b.y, b.radius * b.atmos, 0, Math.PI*2); ctx.fill();
+
+    ctx.save();
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.radius, 0, Math.PI*2); ctx.clip();
+    ctx.fillStyle = "#111"; 
+    ctx.fillRect(b.x-b.radius, b.y-b.radius, b.radius*2, b.radius*2);
+    ctx.fillStyle = b.palette[0];
+    ctx.fillRect(b.x-b.radius, b.y-b.radius, b.radius*2, b.radius*2);
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = b.palette[1];
+    if (b.theme === "Gas") {
+        for(let i=0; i<25; i++) {
+            let offset = (Math.sin(b.seed + i) * b.radius);
+            ctx.fillRect(b.x - b.radius, b.y + offset, b.radius*2, b.radius * 0.04);
+        }
+    } else if (b.theme === "Tech") {
+        ctx.strokeStyle = b.palette[2] || "#00ffff";
+        ctx.lineWidth = 15;
+        for(let i=0; i<12; i++) {
+            ctx.strokeRect(b.x - b.radius + (i*b.radius*0.25), b.y - b.radius, 2, b.radius*2);
+            ctx.strokeRect(b.x - b.radius, b.y - b.radius + (i*b.radius*0.25), b.radius*2, 2);
+        }
+    } else {
+        b.features.forEach(f => {
+            ctx.beginPath();
+            let fx = b.x + Math.cos(f.a) * b.radius * f.r;
+            let fy = b.y + Math.sin(f.a) * b.radius * f.r;
+            ctx.arc(fx, fy, b.radius * f.s * 0.4, 0, Math.PI*2);
+            ctx.fill();
+            ctx.strokeStyle = "rgba(255,255,255,0.1)";
+            ctx.stroke();
+        });
+    }
+
+    if(b.debris) {
+        b.debris.forEach(d => {
+            ctx.save();
+            let dx = b.x + Math.cos(d.a) * (b.radius - 2);
+            let dy = b.y + Math.sin(d.a) * (b.radius - 2);
+            ctx.translate(dx, dy);
+            ctx.rotate(d.a + Math.PI/2 + d.rot);
+            ctx.fillStyle = d.col; 
+            ctx.globalAlpha = 0.9;
+            ctx.fillRect(-d.w/2, -d.h, d.w, d.h);
+            ctx.strokeStyle = "rgba(0,0,0,0.4)";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(-d.w/2, -d.h, d.w, d.h);
+            ctx.restore();
+        });
+    }
+
+    let sG = ctx.createRadialGradient(b.x - b.radius*0.4, b.y - b.radius*0.4, b.radius*0.1, b.x, b.y, b.radius);
+    sG.addColorStop(0, "rgba(255,255,255,0.1)");
+    sG.addColorStop(1, "rgba(0,0,0,0.6)");
+    ctx.fillStyle = sG;
+    ctx.fillRect(b.x-b.radius, b.y-b.radius, b.radius*2, b.radius*2);
+    ctx.restore();
+
+    let dToS = Math.sqrt((b.x-ship.x)**2 + (b.y-ship.y)**2);
+    let lSize = Math.max(16, 28 / zoom);
+    let op = zoom < 0.001 ? 1 : Math.max(0.1, 1 - (dToS / 1500000));
+    ctx.save(); ctx.globalAlpha = op; ctx.fillStyle = "white"; ctx.font = `bold ${lSize}px monospace`;
+    ctx.textAlign = "center"; ctx.fillText(b.name, b.x, b.y - b.radius * 1.4); ctx.restore();
+}
+
+function drawRocket(targetX, targetY, targetAngle, targetThrottle, isOther = false) {
+    ctx.save(); 
+    ctx.translate(targetX, targetY); 
+    ctx.rotate(targetAngle + Math.PI/2);
+    // Change color if it's someone else
+    ctx.strokeStyle = isOther ? "#00ffcc" : "#555"; 
+    ctx.lineWidth = 3;
+    [-1, 1].forEach(s => { ctx.beginPath(); ctx.moveTo(s*8, 10); ctx.lineTo(s*40, 60); ctx.stroke(); ctx.fillStyle = "#111"; ctx.fillRect(s*40-10, 60, 20, 6); });
+
+    if (targetThrottle > 0.01) {
+        ctx.save();
+        let t = targetThrottle;
+        ctx.shadowBlur = 35 * t; 
+        ctx.shadowColor = "rgba(0, 180, 255, 0.8)";
+        let fG = ctx.createLinearGradient(0, 35, 0, 35 + t*250);
+        fG.addColorStop(0, "#fff"); fG.addColorStop(0.2, "#00ccff"); fG.addColorStop(1, "transparent");
+        ctx.fillStyle = fG; ctx.beginPath(); ctx.moveTo(-13, 35); ctx.lineTo(13, 35); ctx.lineTo(0, 35 + t*250); ctx.fill();
+        ctx.restore();
+    }
+
+    let hG = ctx.createLinearGradient(-13, 0, 13, 0);
+    hG.addColorStop(0, isOther ? "#0a2222" : "#1a1c1f"); 
+    hG.addColorStop(0.5, isOther ? "#00ffcc" : "#7a7f85"); 
+    hG.addColorStop(1, isOther ? "#0a2222" : "#1a1c1f");
+    ctx.fillStyle = hG; ctx.fillRect(-13, -15, 26, 55); 
+    let nG = ctx.createRadialGradient(0, -30, 5, 0, -30, 40);
+    nG.addColorStop(0, isOther ? "#00ccaa" : "#ccc"); nG.addColorStop(1, "#444");
+    ctx.fillStyle = nG; ctx.beginPath(); ctx.moveTo(-13, -15); ctx.lineTo(0, -65); ctx.lineTo(13, -15); ctx.fill();
+    ctx.fillStyle = "#33bbff"; ctx.beginPath(); ctx.arc(0, -28, 7, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+}
+
+function render() {
+    update();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save(); 
+    ctx.translate(canvas.width/2, canvas.height/2); 
+    ctx.scale(zoom, zoom); 
+    ctx.translate(-ship.x, -ship.y);
+
+    bodies.forEach(b => {
+        let d = Math.sqrt((b.x-ship.x)**2 + (b.y-ship.y)**2);
+        if (d < 1500000 / zoom) drawPlanet(b);
+    });
+
+    drawTrajectory();
+
+    // 2. DRAW OTHER PLAYERS
+    Object.keys(otherPlayers).forEach(id => {
+        if (id === socket.id) return;
+        const p = otherPlayers[id];
+        // Only draw if player data exists and they aren't broken
+        if (p && !p.isBroken) {
+            drawRocket(p.x, p.y, p.angle, p.throttle, true);
+        }
+    });
+
+    if(!ship.isBroken) {
+        drawRocket(ship.x, ship.y, ship.angle, ship.throttle, false);
+        if (targetPlanet) {
+            let a = Math.atan2(targetPlanet.y - ship.y, targetPlanet.x - ship.x);
+            ctx.save(); ctx.translate(ship.x + Math.cos(a)*120, ship.y + Math.sin(a)*120); ctx.rotate(a);
+            ctx.fillStyle = "white"; ctx.beginPath(); ctx.moveTo(25, 0); ctx.lineTo(-10, -12); ctx.lineTo(-10, 12); ctx.fill(); ctx.restore();
+        }
+    } else {
+        ship.pieces.forEach(p => {
+            ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.ang);
+            ctx.fillStyle = p.col; ctx.fillRect(-p.w/2, -p.h/2, p.w, p.h); ctx.restore();
+        });
+    }
+    ctx.restore();
+    drawGalaxyLabels(); 
+    drawShipTracker();
+
+    let hR = getClosestBody(ship.x, ship.y);
+    let sAng = Math.atan2(ship.y - hR.body.y, ship.x - hR.body.x);
+    let diff = Math.abs((ship.angle % (Math.PI*2)) - (sAng % (Math.PI*2)));
+    if (diff > Math.PI) diff = Math.PI*2 - diff; 
+    let degOff = diff * (180/Math.PI);
+
+    document.getElementById('throt').innerText = Math.round(ship.throttle * 100);
+    document.getElementById('vel').innerText = Math.round(Math.sqrt(ship.vx**2 + ship.vy**2)*10);
+    document.getElementById('alt').innerText = Math.max(0, Math.round(hR.dist - hR.body.radius - 61));
+
+    let statusEl = document.getElementById('shipStatus');
+    if (ship.isBroken) {
+        statusEl.innerText = "HULL BREACH"; statusEl.style.color = "#ff4444";
+    } else if (ship.isLanded) {
+        statusEl.innerText = "STATIONARY"; statusEl.style.color = "#ececec";
+    } else {
+        if (degOff > 3 && (hR.dist - hR.body.radius) < 3000) {
+            statusEl.innerText = "ALIGNMENT ERR"; statusEl.style.color = "#ff4444";
+        } else {
+            statusEl.innerText = "FLIGHT"; statusEl.style.color = "#ececec";
+        }
+    }
+    requestAnimationFrame(render);
+}
+render();
+</script>
+</body>
+</html>
