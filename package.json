@@ -1,28 +1,13 @@
 {
-  "name": "workspace",
-  "version": "0.0.0",
-  "license": "MIT",
+  "name": "rocket-multiplayer",
+  "version": "1.0.0",
+  "description": "Multiplayer Rocket Game",
+  "main": "index.js",
   "scripts": {
-    
-    "build": "pnpm run typecheck && pnpm -r --if-present run build",
-    "typecheck:libs": "tsc --build",
-    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
-  },
-  "private": true,
-  "devDependencies": {
-    "prettier": "^3.8.1",
-    "typescript": "~5.9.2"
+    "start": "node index.js"
   },
   "dependencies": {
-    "express": "^5.2.1",
-    "socket.io": "^4.8.3"
-  },
-  "description": "",
-  "main": "index.js",
-  "directories": {
-    "lib": "lib"
-  },
-  "keywords": [],
-  "author": "",
-  "type": "commonjs"
+    "express": "^4.18.2",
+    "socket.io": "^4.6.1"
+  }
 }
