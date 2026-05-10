@@ -79,9 +79,32 @@ const socket = io();
 let otherPlayers = {};
 let myUsername = "Guest";
 
-socket.on('currentPlayers', (p) => { otherPlayers = p; });
+socket.on('currentPlayers', (p) => { 
+    // Initialize pieces for players who are already broken
+    Object.keys(p).forEach(id => {
+        if(p[id].isBroken) shatterOtherPlayer(p[id]);
+    });
+    otherPlayers = p; 
+});
+
 socket.on('newPlayer', (d) => { otherPlayers[d.id] = d.player; });
-socket.on('playerMoved', (d) => { otherPlayers[d.id] = d.player; });
+
+socket.on('playerMoved', (d) => { 
+    const p = otherPlayers[d.id];
+    // If player just broke, trigger local shatter
+    if (d.player.isBroken && (!p || !p.isBroken)) {
+        shatterOtherPlayer(d.player);
+    } 
+    // If player respawned, clear pieces
+    else if (!d.player.isBroken && p && p.isBroken) {
+        d.player.pieces = [];
+    }
+    
+    // Maintain local pieces array during movement update
+    if (p && p.pieces) d.player.pieces = p.pieces;
+    otherPlayers[d.id] = d.player; 
+});
+
 socket.on('playerDisconnected', (id) => { delete otherPlayers[id]; });
 
 document.getElementById('start-btn').onclick = () => {
@@ -262,12 +285,29 @@ function shatter() {
         {w:24, h:35, col:'#aaa'}, {w:26, h:50, col:'#555'},
         {w:18, h:15, col:'#222'}, {w:6, h:45, col:'#888'}, {w:6, h:45, col:'#888'}
     ];
+    ship.pieces = [];
     parts.forEach(p => {
         ship.pieces.push({ 
             ...p, x: ship.x, y: ship.y, 
-            vx: ship.vx + (seededRandom()-0.5)*500, 
-            vy: ship.vy + (seededOpen-0.5)*500, 
+            vx: (seededRandom()-0.5)*500, 
+            vy: (seededRandom()-0.5)*500, 
             ang: ship.angle, rv: (seededRandom()-0.5)*0.5 
+        });
+    });
+}
+
+function shatterOtherPlayer(pObj) {
+    const parts = [
+        {w:24, h:35, col:'#aaa'}, {w:26, h:50, col:'#555'},
+        {w:18, h:15, col:'#222'}, {w:6, h:45, col:'#888'}
+    ];
+    pObj.pieces = [];
+    parts.forEach(p => {
+        pObj.pieces.push({ 
+            ...p, x: pObj.x, y: pObj.y, 
+            vx: (Math.random()-0.5)*500, 
+            vy: (Math.random()-0.5)*500, 
+            ang: pObj.angle, rv: (Math.random()-0.5)*0.5 
         });
     });
 }
@@ -281,30 +321,34 @@ function getClosestBody(px, py) {
     return { body: cl, dist: mD };
 }
 
+function updatePieces(pieces) {
+    if (!pieces) return;
+    pieces.forEach(p => {
+        let res = getClosestBody(p.x, p.y);
+        let b = res.body; let d = res.dist;
+        let force = (G * b.mass) / (d * d);
+        let a = Math.atan2(b.y - p.y, b.x - p.x);
+        p.vx += Math.cos(a) * force * DT; p.vy += Math.sin(a) * force * DT;
+        p.x += p.vx * DT; p.y += p.vy * DT; p.ang += p.rv;
+        if (d < b.radius + 5) {
+            let nx = (p.x - b.x)/d; let ny = (p.y - b.y)/d;
+            let dot = p.vx*nx + p.vy*ny;
+            if (dot < 0) {
+                p.vx -= 1.6 * dot * nx; p.vy -= 1.6 * dot * ny;
+                p.vx *= 0.5; p.vy *= 0.5; 
+                p.rv = (Math.random()-0.5) * 0.4;
+            }
+            p.x = b.x + nx*(b.radius + 6); p.y = b.y + ny*(b.radius + 6);
+        }
+    });
+}
+
 function update() {
     if (keys['r']) { ship.isBroken = false; ship.pieces = []; ship.vx = 0; ship.vy = 0; ship.x = bodies[0].x; ship.y = bodies[0].y - bodies[0].radius - 61.5; ship.isLanded = true; ship.angle = -Math.PI/2; ship.throttle = 0; isAutoOrbiting = false; }
     if (menuOpen) return;
 
     if (ship.isBroken) {
-        ship.pieces.forEach(p => {
-            let res = getClosestBody(p.x, p.y);
-            let b = res.body; let d = res.dist;
-            let force = (G * b.mass) / (d * d);
-            let a = Math.atan2(b.y - p.y, b.x - p.x);
-            p.vx += Math.cos(a) * force * DT; p.vy += Math.sin(a) * force * DT;
-            p.x += p.vx * DT; p.y += p.vy * DT; p.ang += p.rv;
-            if (d < b.radius + 5) {
-                let nx = (p.x - b.x)/d; let ny = (p.y - b.y)/d;
-                let dot = p.vx*nx + p.vy*ny;
-                if (dot < 0) {
-                    p.vx -= 1.6 * dot * nx;
-                    p.vy -= 1.6 * dot * ny;
-                    p.vx *= 0.5; p.vy *= 0.5; 
-                    p.rv = (seededRandom()-0.5) * 0.4;
-                }
-                p.x = b.x + nx*(b.radius + 6); p.y = b.y + ny*(b.radius + 6);
-            }
-        });
+        updatePieces(ship.pieces);
         socket.emit('playerMovement', { x: ship.x, y: ship.y, angle: ship.angle, throttle: 0, isBroken: true, username: myUsername });
         return;
     }
@@ -391,7 +435,6 @@ function update() {
         setTimeout(() => ban.classList.remove('show'), 4000);
     }
 
-    // MULTIPLAYER BROADCAST
     socket.emit('playerMovement', { x: ship.x, y: ship.y, angle: ship.angle, throttle: ship.throttle, isBroken: ship.isBroken, username: myUsername });
 }
 
@@ -419,235 +462,113 @@ function drawGalaxyLabels() {
 function drawShipTracker() {
     if (zoom < 0.04) {
         ctx.save();
-        
-        // 1. TRACK OTHER PLAYERS
         Object.keys(otherPlayers).forEach(id => {
             if (id === socket.id) return;
             const p = otherPlayers[id];
             if (!p || p.isBroken) return;
-
             let screenX = (p.x - ship.x) * zoom + canvas.width / 2;
             let screenY = (p.y - ship.y) * zoom + canvas.height / 2;
-
             ctx.save();
             ctx.translate(screenX, screenY);
-            
             let pulse = Math.sin(Date.now() / 400) * 0.5 + 0.5;
             ctx.strokeStyle = `rgba(0, 255, 204, ${0.1 + pulse * 0.3})`;
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.arc(0, 0, 20, 0, Math.PI * 2);
-            ctx.stroke();
-
-            ctx.rotate(p.angle + Math.PI/2);
-            ctx.fillStyle = "#00ffcc";
-            ctx.beginPath();
-            ctx.moveTo(0, -10);
-            ctx.lineTo(6, 8);
-            ctx.lineTo(-6, 8);
-            ctx.closePath();
-            ctx.fill();
+            ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(0, 0, 20, 0, Math.PI * 2); ctx.stroke();
+            ctx.rotate(p.angle + Math.PI/2); ctx.fillStyle = "#00ffcc"; ctx.beginPath();
+            ctx.moveTo(0, -10); ctx.lineTo(6, 8); ctx.lineTo(-6, 8); ctx.closePath(); ctx.fill();
             ctx.restore();
-
-            ctx.fillStyle = "rgba(0, 255, 204, 0.6)";
-            ctx.font = "10px monospace";
-            ctx.textAlign = "center";
+            ctx.fillStyle = "rgba(0, 255, 204, 0.6)"; ctx.font = "10px monospace"; ctx.textAlign = "center";
             ctx.fillText(p.username || "PILOT", screenX, screenY + 25);
         });
 
-        // 2. TRACK LOCAL PLAYER
         ctx.save();
         ctx.translate(canvas.width / 2, canvas.height / 2);
         let myPulse = Math.sin(Date.now() / 250) * 0.5 + 0.5;
         ctx.strokeStyle = `rgba(0, 255, 204, ${0.2 + myPulse * 0.4})`;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(0, 0, 25, 0, Math.PI * 2);
-        ctx.stroke();
-
-        ctx.save();
-        ctx.rotate(ship.angle + Math.PI/2);
-        ctx.fillStyle = "#00ffcc";
-        ctx.beginPath();
-        ctx.moveTo(0, -15);
-        ctx.lineTo(8, 10);
-        ctx.lineTo(-8, 10);
-        ctx.closePath();
-        ctx.fill();
-        ctx.restore();
-
-        ctx.fillStyle = "rgba(255,255,255,0.8)";
-        ctx.font = "bold 12px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText("YOU", 0, 45);
-        ctx.restore();
-
-        ctx.restore();
+        ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 0, 25, 0, Math.PI * 2); ctx.stroke();
+        ctx.save(); ctx.rotate(ship.angle + Math.PI/2); ctx.fillStyle = "#00ffcc"; ctx.beginPath();
+        ctx.moveTo(0, -15); ctx.lineTo(8, 10); ctx.lineTo(-8, 10); ctx.closePath(); ctx.fill(); ctx.restore();
+        ctx.fillStyle = "rgba(255,255,255,0.8)"; ctx.font = "bold 12px monospace"; ctx.textAlign = "center";
+        ctx.fillText("YOU", 0, 45); ctx.restore(); ctx.restore();
     }
 }
 
 function drawTrajectory() {
-    if (ship.isBroken || ship.isLanded || !showTrajectory) {
-        trajectoryCache = [];
-        return;
-    }
+    if (ship.isBroken || ship.isLanded || !showTrajectory) { trajectoryCache = []; return; }
     frameCounter++;
     if (frameCounter % 4 === 0 || trajectoryCache.length === 0) {
         trajectoryCache = []; 
         let tx = ship.x, ty = ship.y, tvx = ship.vx, tvy = ship.vy;
-        const maxPhysicsSteps = 12000; 
-        const stepSkip = 100;              
-        const predictionDT = 0.15;      
-
+        const maxPhysicsSteps = 12000; const stepSkip = 100; const predictionDT = 0.15;      
         for (let i = 0; i < maxPhysicsSteps; i++) {
             let res = getClosestBody(tx, ty);
-            let b = res.body; 
-            let dSq = (tx - b.x)**2 + (ty - b.y)**2;
-            let d = Math.sqrt(dSq);
-            let f = (G * b.mass) / dSq;
+            let b = res.body; let dSq = (tx - b.x)**2 + (ty - b.y)**2;
+            let d = Math.sqrt(dSq); let f = (G * b.mass) / dSq;
             let angleToBody = Math.atan2(b.y - ty, b.x - tx);
-            tvx += Math.cos(angleToBody) * f * predictionDT; 
-            tvy += Math.sin(angleToBody) * f * predictionDT;
-            tx += tvx * predictionDT; 
-            ty += tvy * predictionDT;
+            tvx += Math.cos(angleToBody) * f * predictionDT; tvy += Math.sin(angleToBody) * f * predictionDT;
+            tx += tvx * predictionDT; ty += tvy * predictionDT;
             if (i % stepSkip === 0) trajectoryCache.push({x: tx, y: ty});
             if (d < b.radius) break;
         }
     }
     if (trajectoryCache.length > 0) {
-        ctx.beginPath();
-        ctx.setLineDash([8, 12]); 
-        ctx.strokeStyle = "rgba(0, 255, 204, 0.4)"; 
-        ctx.lineWidth = 1.5 / zoom;
-        ctx.moveTo(ship.x, ship.y);
+        ctx.beginPath(); ctx.setLineDash([8, 12]); ctx.strokeStyle = "rgba(0, 255, 204, 0.4)"; 
+        ctx.lineWidth = 1.5 / zoom; ctx.moveTo(ship.x, ship.y);
         for (let p of trajectoryCache) ctx.lineTo(p.x, p.y);
-        ctx.stroke();
-        ctx.setLineDash([]);
+        ctx.stroke(); ctx.setLineDash([]);
     }
 }
 
 function drawPlanet(b) {
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, b.radius + 10, 0, Math.PI*2);
-    ctx.fillStyle = "rgba(255,255,255,0.05)";
-    ctx.fill();
-
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.radius + 10, 0, Math.PI*2); ctx.fillStyle = "rgba(255,255,255,0.05)"; ctx.fill();
     let aG = ctx.createRadialGradient(b.x, b.y, b.radius, b.x, b.y, b.radius * b.atmos);
     aG.addColorStop(0, b.palette[1] + "33"); aG.addColorStop(1, "transparent");
     ctx.fillStyle = aG; ctx.beginPath(); ctx.arc(b.x, b.y, b.radius * b.atmos, 0, Math.PI*2); ctx.fill();
-
-    ctx.save();
-    ctx.beginPath(); ctx.arc(b.x, b.y, b.radius, 0, Math.PI*2); ctx.clip();
-    ctx.fillStyle = "#111"; 
-    ctx.fillRect(b.x-b.radius, b.y-b.radius, b.radius*2, b.radius*2);
-    ctx.fillStyle = b.palette[0];
-    ctx.fillRect(b.x-b.radius, b.y-b.radius, b.radius*2, b.radius*2);
-    ctx.globalAlpha = 0.4;
-    ctx.fillStyle = b.palette[1];
+    ctx.save(); ctx.beginPath(); ctx.arc(b.x, b.y, b.radius, 0, Math.PI*2); ctx.clip();
+    ctx.fillStyle = "#111"; ctx.fillRect(b.x-b.radius, b.y-b.radius, b.radius*2, b.radius*2);
+    ctx.fillStyle = b.palette[0]; ctx.fillRect(b.x-b.radius, b.y-b.radius, b.radius*2, b.radius*2);
+    ctx.globalAlpha = 0.4; ctx.fillStyle = b.palette[1];
     if (b.theme === "Gas") {
-        for(let i=0; i<25; i++) {
-            let offset = (Math.sin(b.seed + i) * b.radius);
-            ctx.fillRect(b.x - b.radius, b.y + offset, b.radius*2, b.radius * 0.04);
-        }
+        for(let i=0; i<25; i++) { let offset = (Math.sin(b.seed + i) * b.radius); ctx.fillRect(b.x - b.radius, b.y + offset, b.radius*2, b.radius * 0.04); }
     } else if (b.theme === "Tech") {
-        ctx.strokeStyle = b.palette[2] || "#00ffff";
-        ctx.lineWidth = 15;
-        for(let i=0; i<12; i++) {
-            ctx.strokeRect(b.x - b.radius + (i*b.radius*0.25), b.y - b.radius, 2, b.radius*2);
-            ctx.strokeRect(b.x - b.radius, b.y - b.radius + (i*b.radius*0.25), b.radius*2, 2);
-        }
+        ctx.strokeStyle = b.palette[2] || "#00ffff"; ctx.lineWidth = 15;
+        for(let i=0; i<12; i++) { ctx.strokeRect(b.x - b.radius + (i*b.radius*0.25), b.y - b.radius, 2, b.radius*2); ctx.strokeRect(b.x - b.radius, b.y - b.radius + (i*b.radius*0.25), b.radius*2, 2); }
     } else {
-        b.features.forEach(f => {
-            ctx.beginPath();
-            let fx = b.x + Math.cos(f.a) * b.radius * f.r;
-            let fy = b.y + Math.sin(f.a) * b.radius * f.r;
-            ctx.arc(fx, fy, b.radius * f.s * 0.4, 0, Math.PI*2);
-            ctx.fill();
-            ctx.strokeStyle = "rgba(255,255,255,0.1)";
-            ctx.stroke();
-        });
+        b.features.forEach(f => { ctx.beginPath(); let fx = b.x + Math.cos(f.a) * b.radius * f.r; let fy = b.y + Math.sin(f.a) * b.radius * f.r; ctx.arc(fx, fy, b.radius * f.s * 0.4, 0, Math.PI*2); ctx.fill(); ctx.strokeStyle = "rgba(255,255,255,0.1)"; ctx.stroke(); });
     }
-
-    if(b.debris) {
-        b.debris.forEach(d => {
-            ctx.save();
-            let dx = b.x + Math.cos(d.a) * (b.radius - 2);
-            let dy = b.y + Math.sin(d.a) * (b.radius - 2);
-            ctx.translate(dx, dy);
-            ctx.rotate(d.a + Math.PI/2 + d.rot);
-            ctx.fillStyle = d.col; 
-            ctx.globalAlpha = 0.9;
-            ctx.fillRect(-d.w/2, -d.h, d.w, d.h);
-            ctx.strokeStyle = "rgba(0,0,0,0.4)";
-            ctx.lineWidth = 2;
-            ctx.strokeRect(-d.w/2, -d.h, d.w, d.h);
-            ctx.restore();
-        });
-    }
-
+    if(b.debris) { b.debris.forEach(d => { ctx.save(); let dx = b.x + Math.cos(d.a) * (b.radius - 2); let dy = b.y + Math.sin(d.a) * (b.radius - 2); ctx.translate(dx, dy); ctx.rotate(d.a + Math.PI/2 + d.rot); ctx.fillStyle = d.col; ctx.globalAlpha = 0.9; ctx.fillRect(-d.w/2, -d.h, d.w, d.h); ctx.strokeStyle = "rgba(0,0,0,0.4)"; ctx.lineWidth = 2; ctx.strokeRect(-d.w/2, -d.h, d.w, d.h); ctx.restore(); }); }
     let sG = ctx.createRadialGradient(b.x - b.radius*0.4, b.y - b.radius*0.4, b.radius*0.1, b.x, b.y, b.radius);
-    sG.addColorStop(0, "rgba(255,255,255,0.1)");
-    sG.addColorStop(1, "rgba(0,0,0,0.6)");
-    ctx.fillStyle = sG;
-    ctx.fillRect(b.x-b.radius, b.y-b.radius, b.radius*2, b.radius*2);
-    ctx.restore();
-
+    sG.addColorStop(0, "rgba(255,255,255,0.1)"); sG.addColorStop(1, "rgba(0,0,0,0.6)");
+    ctx.fillStyle = sG; ctx.fillRect(b.x-b.radius, b.y-b.radius, b.radius*2, b.radius*2); ctx.restore();
     let dToS = Math.sqrt((b.x-ship.x)**2 + (b.y-ship.y)**2);
-    let lSize = Math.max(16, 28 / zoom);
-    let op = zoom < 0.001 ? 1 : Math.max(0.1, 1 - (dToS / 1500000));
+    let lSize = Math.max(16, 28 / zoom); let op = zoom < 0.001 ? 1 : Math.max(0.1, 1 - (dToS / 1500000));
     ctx.save(); ctx.globalAlpha = op; ctx.fillStyle = "white"; ctx.font = `bold ${lSize}px monospace`;
     ctx.textAlign = "center"; ctx.fillText(b.name, b.x, b.y - b.radius * 1.4); ctx.restore();
 }
 
 function drawRocket(targetX, targetY, targetAngle, targetThrottle, name = "") {
-    ctx.save(); 
-    ctx.translate(targetX, targetY); 
-
-    // DRAW USERNAME
-    if(name !== "") {
-        ctx.save();
-        ctx.fillStyle = "white";
-        ctx.font = `${Math.max(14, 20/zoom)}px monospace`;
-        ctx.textAlign = "center";
-        ctx.fillText(name.toUpperCase(), 0, -100);
-        ctx.restore();
-    }
-
-    ctx.rotate(targetAngle + Math.PI/2);
-    ctx.strokeStyle = "#555"; 
-    ctx.lineWidth = 3;
+    ctx.save(); ctx.translate(targetX, targetY); 
+    if(name !== "") { ctx.save(); ctx.fillStyle = "white"; ctx.font = `${Math.max(14, 20/zoom)}px monospace`; ctx.textAlign = "center"; ctx.fillText(name.toUpperCase(), 0, -100); ctx.restore(); }
+    ctx.rotate(targetAngle + Math.PI/2); ctx.strokeStyle = "#555"; ctx.lineWidth = 3;
     [-1, 1].forEach(s => { ctx.beginPath(); ctx.moveTo(s*8, 10); ctx.lineTo(s*40, 60); ctx.stroke(); ctx.fillStyle = "#111"; ctx.fillRect(s*40-10, 60, 20, 6); });
-
     if (targetThrottle > 0.01) {
-        ctx.save();
-        let t = targetThrottle;
-        ctx.shadowBlur = 35 * t; 
-        ctx.shadowColor = "rgba(0, 180, 255, 0.8)";
+        ctx.save(); let t = targetThrottle; ctx.shadowBlur = 35 * t; ctx.shadowColor = "rgba(0, 180, 255, 0.8)";
         let fG = ctx.createLinearGradient(0, 35, 0, 35 + t*250);
         fG.addColorStop(0, "#fff"); fG.addColorStop(0.2, "#00ccff"); fG.addColorStop(1, "transparent");
-        ctx.fillStyle = fG; ctx.beginPath(); ctx.moveTo(-13, 35); ctx.lineTo(13, 35); ctx.lineTo(0, 35 + t*250); ctx.fill();
-        ctx.restore();
+        ctx.fillStyle = fG; ctx.beginPath(); ctx.moveTo(-13, 35); ctx.lineTo(13, 35); ctx.lineTo(0, 35 + t*250); ctx.fill(); ctx.restore();
     }
-
     let hG = ctx.createLinearGradient(-13, 0, 13, 0);
-    hG.addColorStop(0, "#1a1c1f"); 
-    hG.addColorStop(0.5, "#7a7f85"); 
-    hG.addColorStop(1, "#1a1c1f");
+    hG.addColorStop(0, "#1a1c1f"); hG.addColorStop(0.5, "#7a7f85"); hG.addColorStop(1, "#1a1c1f");
     ctx.fillStyle = hG; ctx.fillRect(-13, -15, 26, 55); 
     let nG = ctx.createRadialGradient(0, -30, 5, 0, -30, 40);
     nG.addColorStop(0, "#ccc"); nG.addColorStop(1, "#444");
     ctx.fillStyle = nG; ctx.beginPath(); ctx.moveTo(-13, -15); ctx.lineTo(0, -65); ctx.lineTo(13, -15); ctx.fill();
-    ctx.fillStyle = "#33bbff"; ctx.beginPath(); ctx.arc(0, -28, 7, 0, Math.PI*2); ctx.fill();
-    ctx.restore();
+    ctx.fillStyle = "#33bbff"; ctx.beginPath(); ctx.arc(0, -28, 7, 0, Math.PI*2); ctx.fill(); ctx.restore();
 }
 
 function render() {
     update();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.save(); 
-    ctx.translate(canvas.width/2, canvas.height/2); 
-    ctx.scale(zoom, zoom); 
-    ctx.translate(-ship.x, -ship.y);
+    ctx.save(); ctx.translate(canvas.width/2, canvas.height/2); ctx.scale(zoom, zoom); ctx.translate(-ship.x, -ship.y);
 
     bodies.forEach(b => {
         let d = Math.sqrt((b.x-ship.x)**2 + (b.y-ship.y)**2);
@@ -656,11 +577,16 @@ function render() {
 
     drawTrajectory();
 
-    // 2. DRAW OTHER PLAYERS
     Object.keys(otherPlayers).forEach(id => {
         if (id === socket.id) return;
         const p = otherPlayers[id];
-        if (p && !p.isBroken) {
+        if (p && p.isBroken) {
+            updatePieces(p.pieces);
+            if(p.pieces) p.pieces.forEach(piece => {
+                ctx.save(); ctx.translate(piece.x, piece.y); ctx.rotate(piece.ang);
+                ctx.fillStyle = piece.col; ctx.fillRect(-piece.w/2, -piece.h/2, piece.w, piece.h); ctx.restore();
+            });
+        } else if (p) {
             drawRocket(p.x, p.y, p.angle, p.throttle, p.username || "Guest");
         }
     });
@@ -679,8 +605,7 @@ function render() {
         });
     }
     ctx.restore();
-    drawGalaxyLabels(); 
-    drawShipTracker();
+    drawGalaxyLabels(); drawShipTracker();
 
     let hR = getClosestBody(ship.x, ship.y);
     let sAng = Math.atan2(ship.y - hR.body.y, ship.x - hR.body.x);
@@ -693,16 +618,11 @@ function render() {
     document.getElementById('alt').innerText = Math.max(0, Math.round(hR.dist - hR.body.radius - 61));
 
     let statusEl = document.getElementById('shipStatus');
-    if (ship.isBroken) {
-        statusEl.innerText = "HULL BREACH"; statusEl.style.color = "#ff4444";
-    } else if (ship.isLanded) {
-        statusEl.innerText = "STATIONARY"; statusEl.style.color = "#ececec";
+    if (ship.isBroken) { statusEl.innerText = "HULL BREACH"; statusEl.style.color = "#ff4444";
+    } else if (ship.isLanded) { statusEl.innerText = "STATIONARY"; statusEl.style.color = "#ececec";
     } else {
-        if (degOff > 3 && (hR.dist - hR.body.radius) < 3000) {
-            statusEl.innerText = "ALIGNMENT ERR"; statusEl.style.color = "#ff4444";
-        } else {
-            statusEl.innerText = "FLIGHT"; statusEl.style.color = "#ececec";
-        }
+        if (degOff > 3 && (hR.dist - hR.body.radius) < 3000) { statusEl.innerText = "ALIGNMENT ERR"; statusEl.style.color = "#ff4444";
+        } else { statusEl.innerText = "FLIGHT"; statusEl.style.color = "#ececec"; }
     }
     requestAnimationFrame(render);
 }
@@ -710,4 +630,3 @@ render();
 </script>
 </body>
 </html>
-
