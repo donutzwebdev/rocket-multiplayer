@@ -23,6 +23,7 @@
             border-radius: 0 0 15px 15px; z-index: 100;
         }
         #banner.show { top: 0px; }
+        /* USERNAME UI */
         #login-screen {
             position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
             background: rgba(0,0,0,0.9); display: flex; flex-direction: column;
@@ -79,6 +80,7 @@ let otherPlayers = {};
 let myUsername = "Guest";
 
 socket.on('currentPlayers', (p) => { 
+    // Initialize pieces for players who are already broken
     Object.keys(p).forEach(id => {
         if(p[id].isBroken) shatterOtherPlayer(p[id]);
     });
@@ -89,13 +91,16 @@ socket.on('newPlayer', (d) => { otherPlayers[d.id] = d.player; });
 
 socket.on('playerMoved', (d) => { 
     const p = otherPlayers[d.id];
+    // If player just broke, trigger local shatter
     if (d.player.isBroken && (!p || !p.isBroken)) {
         shatterOtherPlayer(d.player);
     } 
+    // If player respawned, clear pieces
     else if (!d.player.isBroken && p && p.isBroken) {
         d.player.pieces = [];
     }
     
+    // Maintain local pieces array during movement update
     if (p && p.pieces) d.player.pieces = p.pieces;
     otherPlayers[d.id] = d.player; 
 });
@@ -122,6 +127,7 @@ resize();
 let zoom = 0.5;
 const keys = {};
 const DT = 0.05;
+
 let trajectoryCache = [];
 let frameCounter = 0;
 let showTrajectory = true; 
@@ -157,9 +163,11 @@ function seededRandom() {
 function generateUniverse() {
     const universeSize = 12000000; 
     const minGalDistance = 2500000; 
+
     galaxyTypes.forEach((gt) => {
         let ox, oy, tooClose;
         let attempts = 0;
+
         do {
             tooClose = false;
             ox = (seededRandom() - 0.5) * universeSize;
@@ -170,10 +178,13 @@ function generateUniverse() {
             }
             attempts++;
         } while(tooClose && attempts < 200);
+
         galaxies.push({ name: gt.name, x: ox, y: oy });
+
         for (let i = 0; i < 9; i++) {
             const features = [];
             for(let f=0; f<20; f++) features.push({ r: seededRandom(), a: seededRandom()*Math.PI*2, s: 0.1+seededRandom()*0.6 });
+
             const debris = [];
             if (gt.name === "Black Eye" && seededRandom() > 0.4) {
                 for(let d=0; d<4; d++) {
@@ -186,6 +197,7 @@ function generateUniverse() {
                     });
                 }
             }
+
             bodies.push({
                 galaxy: gt.name, theme: gt.theme, name: `${gt.name.substring(0,3).toUpperCase()}-${i+1}`,
                 x: ox + (i * gt.spread) - (gt.spread * 4), y: oy + (Math.sin(i * 1.8) * gt.spread),
@@ -215,10 +227,12 @@ const ORBIT_SMOOTHING = 0.05;
 window.addEventListener('keydown', e => {
     const k = e.key.toLowerCase();
     keys[k] = true;
+
     if (k === 't') {
         showTrajectory = !showTrajectory;
         document.getElementById('pathStatus').innerText = showTrajectory ? "ON" : "OFF";
     }
+
     if (k === 'e') {
         menuOpen = !menuOpen;
         document.getElementById('navMenu').style.display = menuOpen ? 'block' : 'none';
@@ -239,10 +253,12 @@ window.addEventListener('keydown', e => {
 
 function setCircularOrbit() {
     let res = getClosestBody(ship.x, ship.y);
-    let b = res.body; let r = res.dist;
+    let b = res.body;
+    let r = res.dist;
     let orbitSpeed = Math.sqrt((G * b.mass) / r);
     let angleToBody = Math.atan2(ship.y - b.y, ship.x - b.x);
     let orbitAngle = angleToBody + Math.PI / 2; 
+
     targetOrbitVel.vx = Math.cos(orbitAngle) * orbitSpeed;
     targetOrbitVel.vy = Math.sin(orbitAngle) * orbitSpeed;
     isAutoOrbiting = true;
@@ -265,25 +281,35 @@ function updateNavList() {
 
 function shatter() {
     ship.isBroken = true;
-    ship.pieces = generateBrokenParts(ship.x, ship.y, ship.vx, ship.vy, ship.angle);
-}
-
-function shatterOtherPlayer(pObj) {
-    pObj.pieces = generateBrokenParts(pObj.x, pObj.y, 0, 0, pObj.angle);
-}
-
-function generateBrokenParts(x, y, baseVx, baseVy, angle) {
-    const configs = [
+    const parts = [
         {w:24, h:35, col:'#aaa'}, {w:26, h:50, col:'#555'},
         {w:18, h:15, col:'#222'}, {w:6, h:45, col:'#888'}, {w:6, h:45, col:'#888'}
     ];
-    return configs.map(p => ({
-        ...p, x: x, y: y,
-        vx: baseVx + (Math.random()-0.5)*600,
-        vy: baseVy + (Math.random()-0.5)*600,
-        ang: angle + (Math.random()-0.5),
-        rv: (Math.random()-0.5)*0.6
-    }));
+    ship.pieces = [];
+    parts.forEach(p => {
+        ship.pieces.push({ 
+            ...p, x: ship.x, y: ship.y, 
+            vx: (seededRandom()-0.5)*500, 
+            vy: (seededRandom()-0.5)*500, 
+            ang: ship.angle, rv: (seededRandom()-0.5)*0.5 
+        });
+    });
+}
+
+function shatterOtherPlayer(pObj) {
+    const parts = [
+        {w:24, h:35, col:'#aaa'}, {w:26, h:50, col:'#555'},
+        {w:18, h:15, col:'#222'}, {w:6, h:45, col:'#888'}
+    ];
+    pObj.pieces = [];
+    parts.forEach(p => {
+        pObj.pieces.push({ 
+            ...p, x: pObj.x, y: pObj.y, 
+            vx: (Math.random()-0.5)*500, 
+            vy: (Math.random()-0.5)*500, 
+            ang: pObj.angle, rv: (Math.random()-0.5)*0.5 
+        });
+    });
 }
 
 function getClosestBody(px, py) {
@@ -308,9 +334,9 @@ function updatePieces(pieces) {
             let nx = (p.x - b.x)/d; let ny = (p.y - b.y)/d;
             let dot = p.vx*nx + p.vy*ny;
             if (dot < 0) {
-                p.vx -= 1.7 * dot * nx; p.vy -= 1.7 * dot * ny;
-                p.vx *= 0.4; p.vy *= 0.4; 
-                p.rv = (Math.random()-0.5) * 0.5;
+                p.vx -= 1.6 * dot * nx; p.vy -= 1.6 * dot * ny;
+                p.vx *= 0.5; p.vy *= 0.5; 
+                p.rv = (Math.random()-0.5) * 0.4;
             }
             p.x = b.x + nx*(b.radius + 6); p.y = b.y + ny*(b.radius + 6);
         }
@@ -320,15 +346,18 @@ function updatePieces(pieces) {
 function update() {
     if (keys['r']) { ship.isBroken = false; ship.pieces = []; ship.vx = 0; ship.vy = 0; ship.x = bodies[0].x; ship.y = bodies[0].y - bodies[0].radius - 61.5; ship.isLanded = true; ship.angle = -Math.PI/2; ship.throttle = 0; isAutoOrbiting = false; }
     if (menuOpen) return;
+
     if (ship.isBroken) {
         updatePieces(ship.pieces);
         socket.emit('playerMovement', { x: ship.x, y: ship.y, angle: ship.angle, throttle: 0, isBroken: true, username: myUsername });
         return;
     }
+
     if (keys['w']) { ship.throttle = Math.min(1, ship.throttle + 0.01); isAutoOrbiting = false; }
     if (keys['s']) { ship.throttle = Math.max(0, ship.throttle - 0.01); isAutoOrbiting = false; }
     if (keys['a'] || keys['d']) isAutoOrbiting = false;
-    if (isAutoOrbiting && !ship.isLanded) {
+
+    if (isAutoOrbiting && !ship.isLanded && !ship.isBroken) {
         ship.vx += (targetOrbitVel.vx - ship.vx) * ORBIT_SMOOTHING;
         ship.vy += (targetOrbitVel.vy - ship.vy) * ORBIT_SMOOTHING;
         let travelAngle = Math.atan2(ship.vy, ship.vx);
@@ -336,48 +365,76 @@ function update() {
         while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
         while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
         ship.angle += angleDiff * ORBIT_SMOOTHING;
-        if (Math.sqrt((targetOrbitVel.vx-ship.vx)**2+(targetOrbitVel.vy-ship.vy)**2) < 1) isAutoOrbiting = false;
+        let velDiff = Math.sqrt((targetOrbitVel.vx - ship.vx)**2 + (targetOrbitVel.vy - ship.vy)**2);
+        if (velDiff < 1) isAutoOrbiting = false;
     }
+
     let res = getClosestBody(ship.x, ship.y);
-    let b = res.body; let dist = res.dist;
+    let b = res.body;
+    let dist = res.dist;
+
     let force = (G * b.mass) / (dist * dist);
     let angleToBody = Math.atan2(b.y - ship.y, b.x - ship.x);
-    let gx = Math.cos(angleToBody) * force; let gy = Math.sin(angleToBody) * force;
+    let gx = Math.cos(angleToBody) * force; 
+    let gy = Math.sin(angleToBody) * force;
+
     let tx = Math.cos(ship.angle) * ship.throttle * MAX_THRUST;
     let ty = Math.sin(ship.angle) * ship.throttle * MAX_THRUST;
+
     if (ship.isLanded) {
-        if (ship.throttle > 0.35) ship.isLanded = false;
-        else {
+        let thrustMag = Math.sqrt(tx*tx + ty*ty);
+        let gravMag = Math.sqrt(gx*gx + gy*gy);
+        if (ship.throttle > 0.35 || thrustMag > gravMag * 1.1) {
+            ship.isLanded = false;
+        } else {
             ship.vx = 0; ship.vy = 0;
             let sAng = Math.atan2(ship.y - b.y, ship.x - b.x);
             ship.x = b.x + Math.cos(sAng) * (b.radius + 61.5);
             ship.y = b.y + Math.sin(sAng) * (b.radius + 61.5);
         }
     }
+
     if (!ship.isLanded) {
-        ship.vx += (gx + tx) * DT; ship.vy += (gy + ty) * DT;
-        ship.x += ship.vx * DT; ship.y += ship.vy * DT;
-        if (dist - b.radius <= 61.5) {
+        ship.vx += (gx + tx) * DT;
+        ship.vy += (gy + ty) * DT;
+        ship.x += ship.vx * DT;
+        ship.y += ship.vy * DT;
+
+        let alt = dist - b.radius;
+        if (alt <= 61.5) {
             let spd = Math.sqrt(ship.vx**2 + ship.vy**2);
             let sAng = Math.atan2(ship.y - b.y, ship.x - b.x);
+            let relVel = (ship.vx * (ship.x - b.x) + ship.vy * (ship.y - b.y));
+
             let diff = Math.abs((ship.angle % (Math.PI*2)) - (sAng % (Math.PI*2)));
             if (diff > Math.PI) diff = Math.PI*2 - diff; 
-            if (spd > 110 || diff * (180/Math.PI) > 3) shatter();
-            else if (ship.throttle < 0.2) {
-                ship.isLanded = true; ship.vx = 0; ship.vy = 0; ship.angle = sAng;
+            let degOff = diff * (180/Math.PI);
+
+            if (alt < 54 && relVel < 0) {
+                if (spd > 110 || degOff > 3) {
+                    shatter();
+                } else if (ship.throttle < 0.2) {
+                    ship.isLanded = true; ship.vx = 0; ship.vy = 0; ship.angle = sAng;
+                    ship.x = b.x + Math.cos(sAng) * (b.radius + 61.5);
+                    ship.y = b.y + Math.sin(sAng) * (b.radius + 61.5);
+                }
             }
         }
     }
+
     if (!ship.isLanded && !isAutoOrbiting) {
         if (keys['a']) ship.angle -= ship.rotationSpeed;
         if (keys['d']) ship.angle += ship.rotationSpeed;
     }
+
     if (dist < b.radius * 8 && currentGal !== b.galaxy) {
         currentGal = b.galaxy;
+        const ban = document.getElementById('banner');
         document.getElementById('galName').innerText = b.galaxy;
-        document.getElementById('banner').classList.add('show');
-        setTimeout(() => document.getElementById('banner').classList.remove('show'), 4000);
+        ban.classList.add('show');
+        setTimeout(() => ban.classList.remove('show'), 4000);
     }
+
     socket.emit('playerMovement', { x: ship.x, y: ship.y, angle: ship.angle, throttle: ship.throttle, isBroken: ship.isBroken, username: myUsername });
 }
 
@@ -386,12 +443,17 @@ function drawGalaxyLabels() {
     galaxies.forEach(g => {
         let screenX = (g.x - ship.x) * zoom + canvas.width / 2;
         let screenY = (g.y - ship.y) * zoom + canvas.height / 2;
-        let fontSize = Math.min(14 + 1 / Math.sqrt(zoom * 80), 180); 
-        ctx.fillStyle = "rgba(0, 255, 204, 0.7)"; ctx.font = `bold ${fontSize}px Segoe UI`;
-        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        let growthFactor = 1 / Math.sqrt(zoom * 80); 
+        let fontSize = Math.min(14 + growthFactor, 180); 
+        ctx.fillStyle = "rgba(0, 255, 204, 0.7)";
+        ctx.font = `bold ${fontSize}px Segoe UI`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
         if (screenX > -500 && screenX < canvas.width + 500) {
             ctx.fillText(g.name.toUpperCase(), screenX, screenY);
-            ctx.strokeStyle = "rgba(255, 255, 255, 0.2)"; ctx.strokeRect(screenX - fontSize/1.5, screenY - fontSize/1.5, fontSize*1.33, fontSize*1.33);
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(screenX - fontSize/1.5, screenY - fontSize/1.5, fontSize*1.33, fontSize*1.33);
         }
     });
     ctx.restore();
@@ -401,17 +463,32 @@ function drawShipTracker() {
     if (zoom < 0.04) {
         ctx.save();
         Object.keys(otherPlayers).forEach(id => {
-            if (id === socket.id || !otherPlayers[id] || otherPlayers[id].isBroken) return;
+            if (id === socket.id) return;
             const p = otherPlayers[id];
-            let sx = (p.x - ship.x) * zoom + canvas.width / 2;
-            let sy = (p.y - ship.y) * zoom + canvas.height / 2;
-            ctx.save(); ctx.translate(sx, sy);
-            ctx.strokeStyle = `rgba(0, 255, 204, ${0.1 + (Math.sin(Date.now()/400)*0.5+0.5)*0.3})`;
-            ctx.beginPath(); ctx.arc(0, 0, 20, 0, Math.PI*2); ctx.stroke();
+            if (!p || p.isBroken) return;
+            let screenX = (p.x - ship.x) * zoom + canvas.width / 2;
+            let screenY = (p.y - ship.y) * zoom + canvas.height / 2;
+            ctx.save();
+            ctx.translate(screenX, screenY);
+            let pulse = Math.sin(Date.now() / 400) * 0.5 + 0.5;
+            ctx.strokeStyle = `rgba(0, 255, 204, ${0.1 + pulse * 0.3})`;
+            ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(0, 0, 20, 0, Math.PI * 2); ctx.stroke();
             ctx.rotate(p.angle + Math.PI/2); ctx.fillStyle = "#00ffcc"; ctx.beginPath();
-            ctx.moveTo(0, -10); ctx.lineTo(6, 8); ctx.lineTo(-6, 8); ctx.fill(); ctx.restore();
+            ctx.moveTo(0, -10); ctx.lineTo(6, 8); ctx.lineTo(-6, 8); ctx.closePath(); ctx.fill();
+            ctx.restore();
+            ctx.fillStyle = "rgba(0, 255, 204, 0.6)"; ctx.font = "10px monospace"; ctx.textAlign = "center";
+            ctx.fillText(p.username || "PILOT", screenX, screenY + 25);
         });
-        ctx.restore();
+
+        ctx.save();
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        let myPulse = Math.sin(Date.now() / 250) * 0.5 + 0.5;
+        ctx.strokeStyle = `rgba(0, 255, 204, ${0.2 + myPulse * 0.4})`;
+        ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 0, 25, 0, Math.PI * 2); ctx.stroke();
+        ctx.save(); ctx.rotate(ship.angle + Math.PI/2); ctx.fillStyle = "#00ffcc"; ctx.beginPath();
+        ctx.moveTo(0, -15); ctx.lineTo(8, 10); ctx.lineTo(-8, 10); ctx.closePath(); ctx.fill(); ctx.restore();
+        ctx.fillStyle = "rgba(255,255,255,0.8)"; ctx.font = "bold 12px monospace"; ctx.textAlign = "center";
+        ctx.fillText("YOU", 0, 45); ctx.restore(); ctx.restore();
     }
 }
 
@@ -419,15 +496,18 @@ function drawTrajectory() {
     if (ship.isBroken || ship.isLanded || !showTrajectory) { trajectoryCache = []; return; }
     frameCounter++;
     if (frameCounter % 4 === 0 || trajectoryCache.length === 0) {
-        trajectoryCache = []; let tx = ship.x, ty = ship.y, tvx = ship.vx, tvy = ship.vy;
-        for (let i = 0; i < 12000; i++) {
+        trajectoryCache = []; 
+        let tx = ship.x, ty = ship.y, tvx = ship.vx, tvy = ship.vy;
+        const maxPhysicsSteps = 12000; const stepSkip = 100; const predictionDT = 0.15;      
+        for (let i = 0; i < maxPhysicsSteps; i++) {
             let res = getClosestBody(tx, ty);
             let b = res.body; let dSq = (tx - b.x)**2 + (ty - b.y)**2;
-            let f = (G * b.mass) / dSq; let a = Math.atan2(b.y - ty, b.x - tx);
-            tvx += Math.cos(a) * f * 0.15; tvy += Math.sin(a) * f * 0.15;
-            tx += tvx * 0.15; ty += tvy * 0.15;
-            if (i % 100 === 0) trajectoryCache.push({x: tx, y: ty});
-            if (Math.sqrt(dSq) < b.radius) break;
+            let d = Math.sqrt(dSq); let f = (G * b.mass) / dSq;
+            let angleToBody = Math.atan2(b.y - ty, b.x - tx);
+            tvx += Math.cos(angleToBody) * f * predictionDT; tvy += Math.sin(angleToBody) * f * predictionDT;
+            tx += tvx * predictionDT; ty += tvy * predictionDT;
+            if (i % stepSkip === 0) trajectoryCache.push({x: tx, y: ty});
+            if (d < b.radius) break;
         }
     }
     if (trajectoryCache.length > 0) {
@@ -444,34 +524,44 @@ function drawPlanet(b) {
     aG.addColorStop(0, b.palette[1] + "33"); aG.addColorStop(1, "transparent");
     ctx.fillStyle = aG; ctx.beginPath(); ctx.arc(b.x, b.y, b.radius * b.atmos, 0, Math.PI*2); ctx.fill();
     ctx.save(); ctx.beginPath(); ctx.arc(b.x, b.y, b.radius, 0, Math.PI*2); ctx.clip();
+    ctx.fillStyle = "#111"; ctx.fillRect(b.x-b.radius, b.y-b.radius, b.radius*2, b.radius*2);
     ctx.fillStyle = b.palette[0]; ctx.fillRect(b.x-b.radius, b.y-b.radius, b.radius*2, b.radius*2);
     ctx.globalAlpha = 0.4; ctx.fillStyle = b.palette[1];
     if (b.theme === "Gas") {
-        for(let i=0; i<25; i++) { ctx.fillRect(b.x - b.radius, b.y + (Math.sin(b.seed + i) * b.radius), b.radius*2, b.radius * 0.04); }
+        for(let i=0; i<25; i++) { let offset = (Math.sin(b.seed + i) * b.radius); ctx.fillRect(b.x - b.radius, b.y + offset, b.radius*2, b.radius * 0.04); }
     } else if (b.theme === "Tech") {
         ctx.strokeStyle = b.palette[2] || "#00ffff"; ctx.lineWidth = 15;
         for(let i=0; i<12; i++) { ctx.strokeRect(b.x - b.radius + (i*b.radius*0.25), b.y - b.radius, 2, b.radius*2); ctx.strokeRect(b.x - b.radius, b.y - b.radius + (i*b.radius*0.25), b.radius*2, 2); }
     } else {
-        b.features.forEach(f => { ctx.beginPath(); ctx.arc(b.x + Math.cos(f.a)*b.radius*f.r, b.y + Math.sin(f.a)*b.radius*f.r, b.radius*f.s*0.4, 0, Math.PI*2); ctx.fill(); });
+        b.features.forEach(f => { ctx.beginPath(); let fx = b.x + Math.cos(f.a) * b.radius * f.r; let fy = b.y + Math.sin(f.a) * b.radius * f.r; ctx.arc(fx, fy, b.radius * f.s * 0.4, 0, Math.PI*2); ctx.fill(); ctx.strokeStyle = "rgba(255,255,255,0.1)"; ctx.stroke(); });
     }
-    if(b.debris) b.debris.forEach(d => {
-        ctx.save(); ctx.translate(b.x+Math.cos(d.a)*(b.radius-2), b.y+Math.sin(d.a)*(b.radius-2));
-        ctx.rotate(d.a+Math.PI/2+d.rot); ctx.fillStyle=d.col; ctx.fillRect(-d.w/2, -d.h, d.w, d.h); ctx.restore();
-    });
-    ctx.restore();
+    if(b.debris) { b.debris.forEach(d => { ctx.save(); let dx = b.x + Math.cos(d.a) * (b.radius - 2); let dy = b.y + Math.sin(d.a) * (b.radius - 2); ctx.translate(dx, dy); ctx.rotate(d.a + Math.PI/2 + d.rot); ctx.fillStyle = d.col; ctx.globalAlpha = 0.9; ctx.fillRect(-d.w/2, -d.h, d.w, d.h); ctx.strokeStyle = "rgba(0,0,0,0.4)"; ctx.lineWidth = 2; ctx.strokeRect(-d.w/2, -d.h, d.w, d.h); ctx.restore(); }); }
+    let sG = ctx.createRadialGradient(b.x - b.radius*0.4, b.y - b.radius*0.4, b.radius*0.1, b.x, b.y, b.radius);
+    sG.addColorStop(0, "rgba(255,255,255,0.1)"); sG.addColorStop(1, "rgba(0,0,0,0.6)");
+    ctx.fillStyle = sG; ctx.fillRect(b.x-b.radius, b.y-b.radius, b.radius*2, b.radius*2); ctx.restore();
+    let dToS = Math.sqrt((b.x-ship.x)**2 + (b.y-ship.y)**2);
+    let lSize = Math.max(16, 28 / zoom); let op = zoom < 0.001 ? 1 : Math.max(0.1, 1 - (dToS / 1500000));
+    ctx.save(); ctx.globalAlpha = op; ctx.fillStyle = "white"; ctx.font = `bold ${lSize}px monospace`;
+    ctx.textAlign = "center"; ctx.fillText(b.name, b.x, b.y - b.radius * 1.4); ctx.restore();
 }
 
-function drawRocket(tx, ty, ta, tt, name = "") {
-    ctx.save(); ctx.translate(tx, ty); 
-    if(name !== "") { ctx.fillStyle = "white"; ctx.font = `${Math.max(14, 20/zoom)}px monospace`; ctx.textAlign = "center"; ctx.fillText(name.toUpperCase(), 0, -100); }
-    ctx.rotate(ta + Math.PI/2);
-    if (tt > 0.01) {
-        let fG = ctx.createLinearGradient(0, 35, 0, 35 + tt*250);
-        fG.addColorStop(0, "#fff"); fG.addColorStop(1, "transparent");
-        ctx.fillStyle = fG; ctx.beginPath(); ctx.moveTo(-13, 35); ctx.lineTo(13, 35); ctx.lineTo(0, 35 + tt*250); ctx.fill();
+function drawRocket(targetX, targetY, targetAngle, targetThrottle, name = "") {
+    ctx.save(); ctx.translate(targetX, targetY); 
+    if(name !== "") { ctx.save(); ctx.fillStyle = "white"; ctx.font = `${Math.max(14, 20/zoom)}px monospace`; ctx.textAlign = "center"; ctx.fillText(name.toUpperCase(), 0, -100); ctx.restore(); }
+    ctx.rotate(targetAngle + Math.PI/2); ctx.strokeStyle = "#555"; ctx.lineWidth = 3;
+    [-1, 1].forEach(s => { ctx.beginPath(); ctx.moveTo(s*8, 10); ctx.lineTo(s*40, 60); ctx.stroke(); ctx.fillStyle = "#111"; ctx.fillRect(s*40-10, 60, 20, 6); });
+    if (targetThrottle > 0.01) {
+        ctx.save(); let t = targetThrottle; ctx.shadowBlur = 35 * t; ctx.shadowColor = "rgba(0, 180, 255, 0.8)";
+        let fG = ctx.createLinearGradient(0, 35, 0, 35 + t*250);
+        fG.addColorStop(0, "#fff"); fG.addColorStop(0.2, "#00ccff"); fG.addColorStop(1, "transparent");
+        ctx.fillStyle = fG; ctx.beginPath(); ctx.moveTo(-13, 35); ctx.lineTo(13, 35); ctx.lineTo(0, 35 + t*250); ctx.fill(); ctx.restore();
     }
-    ctx.fillStyle = "#7a7f85"; ctx.fillRect(-13, -15, 26, 55); 
-    ctx.fillStyle = "#ccc"; ctx.beginPath(); ctx.moveTo(-13, -15); ctx.lineTo(0, -65); ctx.lineTo(13, -15); ctx.fill();
+    let hG = ctx.createLinearGradient(-13, 0, 13, 0);
+    hG.addColorStop(0, "#1a1c1f"); hG.addColorStop(0.5, "#7a7f85"); hG.addColorStop(1, "#1a1c1f");
+    ctx.fillStyle = hG; ctx.fillRect(-13, -15, 26, 55); 
+    let nG = ctx.createRadialGradient(0, -30, 5, 0, -30, 40);
+    nG.addColorStop(0, "#ccc"); nG.addColorStop(1, "#444");
+    ctx.fillStyle = nG; ctx.beginPath(); ctx.moveTo(-13, -15); ctx.lineTo(0, -65); ctx.lineTo(13, -15); ctx.fill();
     ctx.fillStyle = "#33bbff"; ctx.beginPath(); ctx.arc(0, -28, 7, 0, Math.PI*2); ctx.fill(); ctx.restore();
 }
 
@@ -479,30 +569,61 @@ function render() {
     update();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save(); ctx.translate(canvas.width/2, canvas.height/2); ctx.scale(zoom, zoom); ctx.translate(-ship.x, -ship.y);
-    bodies.forEach(b => { if (Math.sqrt((b.x-ship.x)**2+(b.y-ship.y)**2) < 1500000/zoom) drawPlanet(b); });
+
+    bodies.forEach(b => {
+        let d = Math.sqrt((b.x-ship.x)**2 + (b.y-ship.y)**2);
+        if (d < 1500000 / zoom) drawPlanet(b);
+    });
+
     drawTrajectory();
+
     Object.keys(otherPlayers).forEach(id => {
         if (id === socket.id) return;
         const p = otherPlayers[id];
         if (p && p.isBroken) {
             updatePieces(p.pieces);
-            if(p.pieces) p.pieces.forEach(pc => {
-                ctx.save(); ctx.translate(pc.x, pc.y); ctx.rotate(pc.ang);
-                ctx.fillStyle = pc.col; ctx.fillRect(-pc.w/2, -pc.h/2, pc.w, pc.h); ctx.restore();
+            if(p.pieces) p.pieces.forEach(piece => {
+                ctx.save(); ctx.translate(piece.x, piece.y); ctx.rotate(piece.ang);
+                ctx.fillStyle = piece.col; ctx.fillRect(-piece.w/2, -piece.h/2, piece.w, piece.h); ctx.restore();
             });
-        } else if (p) drawRocket(p.x, p.y, p.angle, p.throttle, p.username);
+        } else if (p) {
+            drawRocket(p.x, p.y, p.angle, p.throttle, p.username || "Guest");
+        }
     });
-    if(!ship.isBroken) drawRocket(ship.x, ship.y, ship.angle, ship.throttle, myUsername);
-    else ship.pieces.forEach(p => {
-        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.ang);
-        ctx.fillStyle = p.col; ctx.fillRect(-p.w/2, -p.h/2, p.w, p.h); ctx.restore();
-    });
+
+    if(!ship.isBroken) {
+        drawRocket(ship.x, ship.y, ship.angle, ship.throttle, myUsername);
+        if (targetPlanet) {
+            let a = Math.atan2(targetPlanet.y - ship.y, targetPlanet.x - ship.x);
+            ctx.save(); ctx.translate(ship.x + Math.cos(a)*120, ship.y + Math.sin(a)*120); ctx.rotate(a);
+            ctx.fillStyle = "white"; ctx.beginPath(); ctx.moveTo(25, 0); ctx.lineTo(-10, -12); ctx.lineTo(-10, 12); ctx.fill(); ctx.restore();
+        }
+    } else {
+        ship.pieces.forEach(p => {
+            ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.ang);
+            ctx.fillStyle = p.col; ctx.fillRect(-p.w/2, -p.h/2, p.w, p.h); ctx.restore();
+        });
+    }
     ctx.restore();
     drawGalaxyLabels(); drawShipTracker();
+
     let hR = getClosestBody(ship.x, ship.y);
+    let sAng = Math.atan2(ship.y - hR.body.y, ship.x - hR.body.x);
+    let diff = Math.abs((ship.angle % (Math.PI*2)) - (sAng % (Math.PI*2)));
+    if (diff > Math.PI) diff = Math.PI*2 - diff; 
+    let degOff = diff * (180/Math.PI);
+
     document.getElementById('throt').innerText = Math.round(ship.throttle * 100);
     document.getElementById('vel').innerText = Math.round(Math.sqrt(ship.vx**2 + ship.vy**2)*10);
     document.getElementById('alt').innerText = Math.max(0, Math.round(hR.dist - hR.body.radius - 61));
+
+    let statusEl = document.getElementById('shipStatus');
+    if (ship.isBroken) { statusEl.innerText = "HULL BREACH"; statusEl.style.color = "#ff4444";
+    } else if (ship.isLanded) { statusEl.innerText = "STATIONARY"; statusEl.style.color = "#ececec";
+    } else {
+        if (degOff > 3 && (hR.dist - hR.body.radius) < 3000) { statusEl.innerText = "ALIGNMENT ERR"; statusEl.style.color = "#ff4444";
+        } else { statusEl.innerText = "FLIGHT"; statusEl.style.color = "#ececec"; }
+    }
     requestAnimationFrame(render);
 }
 render();
